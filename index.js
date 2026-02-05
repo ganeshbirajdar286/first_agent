@@ -1,6 +1,7 @@
 import { HumanMessage } from "@langchain/core/messages";
 import { MessagesAnnotation, StateGraph } from "@langchain/langgraph";
 import readline from "node:readline/promises"
+import { ChatGroq } from "@langchain/groq";
 
 
 /*
@@ -15,13 +16,42 @@ const r1=readline.createInterface({
     output:process.stdout
 });
 
+/*
+ initalise  the LLM
+*/
+const llm = new ChatGroq({
+  apiKey: process.env.GROQ_API_KEY, 
+  model: "openai/gpt-oss-120b",
+  temperature:0,
+  maxRetries:2
+
+});
+
+
 //  1) define node function
-function callModel(state){   //state has value of messages:[{role:"user",content:userInput}]
+async function callModel(state){   //state has value of messages:[{role:"user",content:userInput}]
     // call the llm using API  
 
     console.log("calling LLM...");
+
+    const response=await llm.invoke(state.messages);
+    return {messages:[response ]} // this response is return will go in langGraph state 
+    //  messages:[response ] this is only write in langraph and langchain it  handle internally merge 
+
+
+//before return 
+//     state.messages = [
+//   { role: "user", content: "Hi" }
+// ]
+
+// after return 
+//state.messages = [
+//   { role: "user", content: "Hi" },
+//   { role: "assistant", content: "Hello! How can I help you?" }
+// ]
+
+
    
-     return state;
 }
 
 // 2) build the graph
@@ -39,18 +69,61 @@ async function main() {
       const finalstate= await app.invoke({
            messages:[{role:"user",content:userInput}]
        })
-        console.log("finalstate:",finalstate);
+       const lastmessage=finalstate.messages[finalstate.messages.length - 1];
+        console.log("AI:",lastmessage.content);
     }
     r1.close();
 }
 
 main()
 
+/* 
+================= HOW THIS CODE RUNS (STEP-WISE) =================
 
-// how the code run
-//1)Readline start
-//2)Graph build
-//3)Compile
-//4)User input
-//5)LLM call
-//6)Final state print
+1️⃣ Readline starts
+   → Terminal chat interface is created to take user input.
+
+2️⃣ LLM initialised
+   → ChatGroq model is configured with API key + model.
+
+3️⃣ Graph built
+   → StateGraph created with:
+        START → agent → END
+
+4️⃣ Graph compiled
+   → Workflow converted into runnable app.
+
+5️⃣ User enters input
+   → Example: "Hello"
+
+6️⃣ Graph invoked
+   → User message passed into LangGraph state.
+
+7️⃣ Agent node executes
+   → callModel() runs
+   → "calling LLM..." printed.
+
+8️⃣ LLM API called
+   → llm.invoke(state.messages)
+
+9️⃣ LLM response returned
+   → Assistant message generated.
+
+🔟 State updated
+   → LangGraph auto-merges:
+        user + assistant messages.
+
+1️⃣1️⃣ Final state received
+   → Returned from graph execution.
+
+1️⃣2️⃣ Last message extracted
+   → Get assistant reply from messages array.
+
+1️⃣3️⃣ AI response printed
+   → console.log("AI:", lastmessage.content)
+
+1️⃣4️⃣ Loop repeats
+   → Until user types "/bye"
+
+===============================================================
+*/
