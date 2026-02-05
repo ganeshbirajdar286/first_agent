@@ -2,7 +2,20 @@ import { HumanMessage } from "@langchain/core/messages";
 import { MessagesAnnotation, StateGraph } from "@langchain/langgraph";
 import readline from "node:readline/promises"
 import { ChatGroq } from "@langchain/groq";
+import { ToolNode } from "@langchain/langgraph/prebuilt";
+import {TavilySearch} from "@langchain/tavily"
 
+
+
+/*
+initailise the tool node
+*/
+const tool=new TavilySearch({
+   maxResults:3,
+   topic:"general"
+});
+const tools=[tool]
+const toolNode =new ToolNode(tools)
 
 /*
   1) define node function
@@ -25,7 +38,7 @@ const llm = new ChatGroq({
   temperature:0,
   maxRetries:2
 
-});
+}).bindTools(tools)
 
 
 //  1) define node function
@@ -54,8 +67,17 @@ async function callModel(state){   //state has value of messages:[{role:"user",c
    
 }
 
+function shouldContinue(state){
+   // whether to call tool or end
+   const lastmessage=state.messages[state.messages.length - 1];
+   if(lastmessage.tool_calls.length > 0){
+      return "tools"
+   }
+  return "__end__"
+}
+
 // 2) build the graph
-const workflow =new StateGraph(MessagesAnnotation).addNode("agent",callModel).addEdge("__start__","agent").addEdge("agent","__end__");
+const workflow =new StateGraph(MessagesAnnotation).addNode("agent",callModel).addNode("tools",toolNode).addEdge("__start__","agent").addEdge("tools","agent").addConditionalEdges("agent",shouldContinue);
 
 //3)complie 
 const app=workflow.compile()
@@ -78,52 +100,273 @@ async function main() {
 main()
 
 /* 
-================= HOW THIS CODE RUNS (STEP-WISE) =================
+================= HOW THIS AGENT WORKS (FULL FLOW) =================
 
-1️⃣ Readline starts
-   → Terminal chat interface is created to take user input.
+🧠 OVERVIEW
+This is a Tool-Calling AI Agent built using:
 
-2️⃣ LLM initialised
-   → ChatGroq model is configured with API key + model.
+- LangGraph → Workflow engine
+- LangChain → LLM + Tools wrapper
+- Groq → Model provider
+- Tavily → Search tool
+- Readline → Terminal chat UI
 
-3️⃣ Graph built
-   → StateGraph created with:
-        START → agent → END
+Flow:
+User → Agent(LLM) → Tool (if needed) → Agent → Output
 
-4️⃣ Graph compiled
-   → Workflow converted into runnable app.
 
-5️⃣ User enters input
-   → Example: "Hello"
+---------------------------------------------------------------
+1️⃣ TOOL INITIALISATION
+---------------------------------------------------------------
 
-6️⃣ Graph invoked
-   → User message passed into LangGraph state.
+const tool = new TavilySearch({...})
 
-7️⃣ Agent node executes
-   → callModel() runs
-   → "calling LLM..." printed.
+→ Tavily is a web search tool
+→ maxResults: 3 → returns top 3 search results
+→ topic: "general" → general web search
 
-8️⃣ LLM API called
-   → llm.invoke(state.messages)
+tools array created:
 
-9️⃣ LLM response returned
-   → Assistant message generated.
+const tools = [tool]
 
-🔟 State updated
-   → LangGraph auto-merges:
-        user + assistant messages.
+Then wrapped inside ToolNode:
 
-1️⃣1️⃣ Final state received
-   → Returned from graph execution.
+const toolNode = new ToolNode(tools)
 
-1️⃣2️⃣ Last message extracted
-   → Get assistant reply from messages array.
+ToolNode allows LangGraph to execute tools.
 
-1️⃣3️⃣ AI response printed
-   → console.log("AI:", lastmessage.content)
 
-1️⃣4️⃣ Loop repeats
-   → Until user types "/bye"
+---------------------------------------------------------------
+2️⃣ LLM INITIALISATION
+---------------------------------------------------------------
 
+const llm = new ChatGroq({...}).bindTools(tools)
+
+→ ChatGroq connects to Groq API
+→ Model: openai/gpt-oss-120b
+→ temperature: 0 → deterministic output
+
+.bindTools(tools) does:
+
+LLM now knows:
+
+• What tools exist  
+• When to call them  
+• How to format tool_calls
+
+
+---------------------------------------------------------------
+3️⃣ NODE FUNCTION — AGENT
+---------------------------------------------------------------
+
+async function callModel(state)
+
+state contains:
+
+{
+  messages: [
+    { role: "user", content: "..." }
+  ]
+}
+
+Steps:
+
+1. Print → "calling LLM..."
+2. Send messages → llm.invoke()
+3. LLM generates response
+4. Return:
+
+return { messages: [response] }
+
+LangGraph auto-merges messages.
+
+
+---------------------------------------------------------------
+4️⃣ CONDITIONAL EDGE LOGIC
+---------------------------------------------------------------
+
+function shouldContinue(state)
+
+Purpose:
+Decide next step.
+
+Steps:
+
+1. Get last message:
+
+const lastmessage = state.messages.at(-1)
+
+2. Check tool calls:
+
+if (lastmessage.tool_calls.length > 0)
+
+If TRUE →
+   go to "tools" node
+
+If FALSE →
+   end graph (__end__)
+
+
+---------------------------------------------------------------
+5️⃣ GRAPH BUILDING
+---------------------------------------------------------------
+
+const workflow = new StateGraph(MessagesAnnotation)
+
+Nodes added:
+
+.addNode("agent", callModel)
+.addNode("tools", toolNode)
+
+Edges:
+
+START → agent
+tools → agent   (loop back after tool runs)
+
+Conditional:
+
+agent → tools OR end
+
+
+Graph structure:
+
+        ┌──────────┐
+START → │  Agent   │
+        └────┬─────┘
+             │
+     tool_calls ?
+        YES │ NO
+             │
+      ┌──────▼─────┐
+      │   Tools    │
+      └──────┬─────┘
+             │
+             └────→ Agent → END
+
+
+---------------------------------------------------------------
+6️⃣ GRAPH COMPILE
+---------------------------------------------------------------
+
+const app = workflow.compile()
+
+→ Converts graph → runnable app
+
+
+---------------------------------------------------------------
+7️⃣ RUNTIME LOOP
+---------------------------------------------------------------
+
+while(true)
+
+Terminal chat runs continuously.
+
+User input taken:
+
+const userInput = await r1.question("You:")
+
+
+---------------------------------------------------------------
+8️⃣ GRAPH INVOCATION
+---------------------------------------------------------------
+
+const finalstate = await app.invoke({
+  messages: [
+    { role: "user", content: userInput }
+  ]
+})
+
+Graph execution starts.
+
+
+---------------------------------------------------------------
+9️⃣ EXECUTION SCENARIOS
+---------------------------------------------------------------
+
+CASE 1 — No Tool Needed
+
+User: "Hello"
+
+Flow:
+
+Agent → LLM → Response → END
+
+
+CASE 2 — Tool Needed
+
+User: "Search latest AI news"
+
+Flow:
+
+Agent → LLM decides tool_call →
+Tools Node executes Tavily →
+Results returned →
+Agent summarises →
+END
+
+
+---------------------------------------------------------------
+🔟 STATE AUTO-MERGE
+---------------------------------------------------------------
+
+Before:
+
+[
+  { role: "user", content: "Hi" }
+]
+
+After Agent:
+
+[
+  { role: "user", content: "Hi" },
+  { role: "assistant", content: "Hello!" }
+]
+
+After Tool:
+
+[
+  user,
+  assistant(tool_call),
+  tool_result,
+  assistant(final_answer)
+]
+
+
+---------------------------------------------------------------
+1️⃣1️⃣ FINAL OUTPUT
+---------------------------------------------------------------
+
+const lastmessage =
+  finalstate.messages[finalstate.messages.length - 1];
+
+console.log("AI:", lastmessage.content);
+
+Prints final AI reply.
+
+
+---------------------------------------------------------------
+1️⃣2️⃣ LOOP EXIT
+---------------------------------------------------------------
+
+If user types:
+
+/bye
+
+Loop breaks → readline closes.
+
+
+===============================================================
+🔚 SUMMARY
+===============================================================
+
+• Readline → takes user input
+• Graph → controls workflow
+• Agent → calls LLM
+• LLM → may call tools
+• ToolNode → executes tools
+• State → stores conversation
+• Conditional edges → decide flow
+
+This creates a fully functional Tool-Calling AI Agent.
 ===============================================================
 */
