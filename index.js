@@ -1,12 +1,14 @@
 import { HumanMessage } from "@langchain/core/messages";
-import { MessagesAnnotation, StateGraph } from "@langchain/langgraph";
+import { MemorySaver, MessagesAnnotation, StateGraph } from "@langchain/langgraph";
 import readline from "node:readline/promises"
 import { ChatGroq } from "@langchain/groq";
 import { ToolNode } from "@langchain/langgraph/prebuilt";
 import {TavilySearch} from "@langchain/tavily"
+import { threadId } from "node:worker_threads";
 
 
-
+// Memory checkpointer → saves chat history per thread
+const checkPointer=new MemorySaver()
 /*
 initailise the tool node
 */
@@ -80,7 +82,8 @@ function shouldContinue(state){
 const workflow =new StateGraph(MessagesAnnotation).addNode("agent",callModel).addNode("tools",toolNode).addEdge("__start__","agent").addEdge("tools","agent").addConditionalEdges("agent",shouldContinue);
 
 //3)complie 
-const app=workflow.compile()
+const app = workflow.compile({ checkpointer: checkPointer /* Enable memory saving*/   })
+
 
 async function main() {
     while(true){
@@ -90,7 +93,7 @@ async function main() {
        //4)invoke the graph
       const finalstate= await app.invoke({
            messages:[{role:"user",content:userInput}]
-       })
+       },{configurable:{thread_id:"1"}})
        const lastmessage=finalstate.messages[finalstate.messages.length - 1];
         console.log("AI:",lastmessage.content);
     }
